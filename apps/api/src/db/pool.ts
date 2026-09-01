@@ -9,9 +9,9 @@ pool.on('error', (err) => {
   console.error('Unexpected DB pool error', err)
 })
 
-export async function query<T = pg.QueryResultRow>(
+export async function query(
   text: string,
   params?: unknown[]
-): Promise<pg.QueryResult<T>> {
-  return pool.query<T>(text, params)
+): Promise<pg.QueryResult<pg.QueryResultRow>> {
+  return pool.query(text, params)
 }

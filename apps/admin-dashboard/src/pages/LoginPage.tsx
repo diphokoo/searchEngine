@@ -44,7 +44,7 @@ export default function LoginPage() {
               <input
                 type="email" className="form-control" value={email}
                 onChange={e => setEmail(e.target.value)} required autoFocus
-                placeholder="admin@example.com"
+                placeholder="diphokoo@outlook.com"
               />
             </div>
             <div className="mb-4">

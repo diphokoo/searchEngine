@@ -1,0 +1,121 @@
+version: "3.9"
+
+services:
+  # ─── Database ───────────────────────────────────────────────────────────────
+  postgres:
+    image: postgis/postgis:16-3.4
+    container_name: ei_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: event_intelligence
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── Redis ──────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: ei_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── Node.js API ────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: ../../infrastructure/Dockerfile.api
+    container_name: ei_api
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      PORT: 3001
+      DB_HOST: postgres
+      DB_NAME: event_intelligence
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      REDIS_HOST: redis
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      MINING_ENGINE_URL: http://mining:8000
+      MINING_ENGINE_API_KEY: ${MINING_ENGINE_API_KEY:-internal-key}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ─── Python Mining Engine ───────────────────────────────────────────────────
+  mining:
+    build:
+      context: ./services/mining-engine
+      dockerfile: ../../infrastructure/Dockerfile.mining
+    container_name: ei_mining
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      DB_HOST: postgres
+      DB_NAME: event_intelligence
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      REDIS_HOST: redis
+      API_KEY: ${MINING_ENGINE_API_KEY:-internal-key}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      NODE_API_URL: http://api:3001
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ─── Discovery Worker ───────────────────────────────────────────────────────
+  discovery-worker:
+    build:
+      context: ./workers/discovery-worker
+      dockerfile: ../../infrastructure/Dockerfile.worker
+    container_name: ei_discovery_worker
+    restart: unless-stopped
+    environment:
+      DB_HOST: postgres
+      DB_NAME: event_intelligence
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      REDIS_HOST: redis
+      MINING_ENGINE_URL: http://mining:8000
+      MINING_ENGINE_API_KEY: ${MINING_ENGINE_API_KEY:-internal-key}
+    depends_on:
+      - api
+      - mining
+
+  # ─── Admin Dashboard ────────────────────────────────────────────────────────
+  dashboard:
+    build:
+      context: ./apps/admin-dashboard
+      dockerfile: ../../infrastructure/Dockerfile.dashboard
+    container_name: ei_dashboard
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:
+  redis_data:
