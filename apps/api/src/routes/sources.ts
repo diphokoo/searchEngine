@@ -35,15 +35,18 @@ export async function sourceRoutes(app: FastifyInstance) {
   app.get('/admin/sources', async (req) => {
     const { page = 1, pageSize = 20, status } = req.query as Record<string, string>
     const p = Number(page), ps = Number(pageSize)
-    const where = status ? `WHERE status = $3` : ''
-    const params = status ? [ps, (p - 1) * ps, status] : [ps, (p - 1) * ps]
-
-    const [data, count] = await Promise.all([
-      query(`SELECT * FROM sources ${where} ORDER BY created_at DESC LIMIT $1 OFFSET $2`, params),
-      query(`SELECT COUNT(*) FROM sources ${status ? 'WHERE status = $1' : ''}`, status ? [status] : []),
-    ])
-    const total = Number(count.rows[0].count)
-    return { data: data.rows.map(toSource), total, page: p, pageSize: ps, totalPages: Math.ceil(total / ps) }
+    try {
+      const where = status ? `WHERE status = $3` : ''
+      const params = status ? [ps, (p - 1) * ps, status] : [ps, (p - 1) * ps]
+      const [data, count] = await Promise.all([
+        query(`SELECT * FROM sources ${where} ORDER BY created_at DESC LIMIT $1 OFFSET $2`, params),
+        query(`SELECT COUNT(*) FROM sources ${status ? 'WHERE status = $1' : ''}`, status ? [status] : []),
+      ])
+      const total = Number(count.rows[0].count)
+      return { data: data.rows.map(toSource), total, page: p, pageSize: ps, totalPages: Math.ceil(total / ps) }
+    } catch {
+      return { data: [], total: 0, page: p, pageSize: ps, totalPages: 0 }
+    }
   })
 
   app.get<{ Params: { id: string } }>('/admin/sources/:id', async (req, reply) => {
