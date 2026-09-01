@@ -68,3 +68,46 @@ export const fetchSystemHealth = () =>
 
 export const fetchJobQueues = () =>
   api.get<Record<string, unknown>>('/admin/system/queues').then(r => r.data)
+
+// ─── Data Mining ──────────────────────────────────────────────────────────────
+export interface MinedEvent {
+  id: string
+  title: string
+  category: string
+  date: string | null
+  startTime: string | null
+  endTime: string | null
+  venue: string | null
+  city: string | null
+  province: string | null
+  description: string | null
+  price: number | null
+  ticketUrl: string | null
+  eventUrl: string | null
+  socialUrl: string | null
+  imageUrl: string | null
+  estimatedAttendance: number | null
+  source: string
+  sourceUrl: string
+  discoveredAt: string
+  verificationStatus: string
+  genres: string[]
+  artists: string[]
+  organiser: string | null
+}
+
+export interface MiningResult {
+  total: number
+  verified: number
+  needsReview: number
+  discovered: number
+  duplicatesRemoved: number
+  minedAt: string
+  events: MinedEvent[]
+}
+
+export const triggerMining = () =>
+  api.post<MiningResult>('/admin/mine').then(r => r.data)
+
+export const fetchMiningResults = () =>
+  api.get<{ events: MinedEvent[]; minedAt: string }>('/admin/mine/results').then(r => r.data)

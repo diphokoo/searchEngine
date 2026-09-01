@@ -8,6 +8,7 @@ import { adminEventRoutes } from './routes/events.js'
 import { sourceRoutes } from './routes/sources.js'
 import { adminRoutes } from './routes/admin.js'
 import { publicEventRoutes } from './routes/publicEvents.js'
+import { miningRoutes } from './routes/mining.js'
 
 const app = Fastify({ logger: { level: 'info' } })
 
@@ -23,6 +24,7 @@ await app.register(adminEventRoutes)
 await app.register(sourceRoutes)
 await app.register(adminRoutes)
 await app.register(publicEventRoutes)
+await app.register(miningRoutes)
 
 // Global error handler
 app.setErrorHandler((error, _req, reply) => {

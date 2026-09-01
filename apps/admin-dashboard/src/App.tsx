@@ -13,6 +13,7 @@ import SourcesPage from './pages/SourcesPage'
 import JobQueuesPage from './pages/JobQueuesPage'
 import AuditLogsPage from './pages/AuditLogsPage'
 import MonitoringPage from './pages/MonitoringPage'
+import DataMiningPage from './pages/DataMiningPage'
 
 function ProtectedLayout() {
   const { user, isLoading } = useAuth()
@@ -27,6 +28,7 @@ function ProtectedLayout() {
         <div className="page-content">
           <Routes>
             <Route path="/" element={<DashboardPage />} />
+            <Route path="/mining" element={<DataMiningPage />} />
             <Route path="/events" element={<EventsPage />} />
             <Route path="/events/:id" element={<EventDetailPage />} />
             <Route path="/events/review" element={<ReviewQueuePage />} />

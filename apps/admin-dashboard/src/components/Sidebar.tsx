@@ -7,6 +7,7 @@ const navItems = [
     { to: '/analytics', icon: 'bi-bar-chart-line', label: 'Analytics' },
   ]},
   { section: 'Events', items: [
+    { to: '/mining', icon: 'bi-database-fill-gear', label: 'Data Mining' },
     { to: '/events', icon: 'bi-calendar-event', label: 'All Events' },
     { to: '/events/review', icon: 'bi-clipboard-check', label: 'Review Queue' },
     { to: '/events/approved', icon: 'bi-check-circle', label: 'Approved' },
