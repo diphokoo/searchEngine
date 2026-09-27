@@ -21,6 +21,39 @@ function StatusPill({ status }: { status: string }) {
   )
 }
 
+const SOURCE_ICONS: Record<string, string> = {
+  Quicket: 'bi-ticket-perforated',
+  Howler: 'bi-music-note-beamed',
+  Webtickets: 'bi-globe2',
+  'Eventbrite ZA': 'bi-calendar-event',
+  Instagram: 'bi-instagram',
+  'Facebook Events': 'bi-facebook',
+  'Twitter/X': 'bi-twitter-x',
+  TikTok: 'bi-tiktok',
+}
+
+function SourceBadge({ source, sourceUrl }: { source: string; sourceUrl: string }) {
+  const icon = SOURCE_ICONS[source] ?? 'bi-link-45deg'
+  return (
+    <a
+      href={sourceUrl} target="_blank" rel="noreferrer"
+      title={`View on ${source}`}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: '0.3em',
+        fontSize: '0.72rem', fontWeight: 600, padding: '0.2em 0.55em',
+        borderRadius: 20, textDecoration: 'none', whiteSpace: 'nowrap',
+        background: 'rgba(167,139,250,0.12)', color: 'var(--accent-light)',
+        border: '1px solid rgba(167,139,250,0.25)',
+        transition: 'background 0.15s',
+      }}
+      onMouseEnter={e => (e.currentTarget.style.background = 'rgba(167,139,250,0.25)')}
+      onMouseLeave={e => (e.currentTarget.style.background = 'rgba(167,139,250,0.12)')}
+    >
+      <i className={`bi ${icon}`} />{source}
+    </a>
+  )
+}
+
 function StatBox({ label, value, color }: { label: string; value: number; color: string }) {
   return (
     <div className="stat-card text-center" style={{ flex: 1, minWidth: 120 }}>
@@ -40,7 +73,7 @@ export default function DataMiningPage() {
   const [filterDate, setFilterDate] = useState('')
   const [page, setPage] = useState(1)
   const [selected, setSelected] = useState<MinedEvent | null>(null)
-  const PAGE_SIZE = 20
+  const PAGE_SIZE = 50
 
   const mineMut = useMutation({
     mutationFn: triggerMining,
@@ -123,12 +156,12 @@ export default function DataMiningPage() {
             <div>
               <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>Mining in progress...</div>
               <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                Scanning Quicket · Howler · Webtickets · Eventbrite ZA
+                Scanning Quicket · Howler · Webtickets · Eventbrite ZA · Instagram · Facebook · Twitter/X · TikTok
               </div>
             </div>
           </div>
           <div className="mt-3">
-            {['Quicket', 'Howler', 'Webtickets', 'Eventbrite ZA'].map(src => (
+            {['Quicket', 'Howler', 'Webtickets', 'Eventbrite ZA', 'Instagram', 'Facebook Events', 'Twitter/X', 'TikTok'].map(src => (
               <div key={src} className="d-flex align-items-center gap-2 mb-1">
                 <div className="spinner-border spinner-border-sm text-secondary" style={{ width: '0.75rem', height: '0.75rem' }} />
                 <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Scanning {src}...</span>
@@ -235,7 +268,20 @@ export default function DataMiningPage() {
                 {paged.map(event => (
                   <tr key={event.id}>
                     <td>
-                      <div style={{ fontWeight: 500, fontSize: '0.85rem' }}>{event.title}</div>
+                      {(event.eventUrl || event.ticketUrl)
+                        ? (
+                          <a
+                            href={event.eventUrl ?? event.ticketUrl ?? ''}
+                            target="_blank" rel="noreferrer"
+                            style={{ fontWeight: 500, fontSize: '0.85rem', color: 'var(--text-h)', textDecoration: 'none' }}
+                            title="View original event"
+                          >
+                            {event.title}
+                            <i className="bi bi-box-arrow-up-right ms-1" style={{ fontSize: '0.65rem', opacity: 0.6 }} />
+                          </a>
+                        )
+                        : <div style={{ fontWeight: 500, fontSize: '0.85rem', color: 'var(--text-muted)' }} title="No source URL available">{event.title} <i className="bi bi-exclamation-circle" style={{ fontSize: '0.65rem', color: '#fbbf24' }} /></div>
+                      }
                       {event.organiser && <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{event.organiser}</div>}
                       {event.artists.length > 0 && (
                         <div style={{ fontSize: '0.7rem', color: 'var(--accent-light)' }}>
@@ -290,10 +336,18 @@ export default function DataMiningPage() {
                         : <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>—</span>}
                     </td>
                     <td>
-                      <a href={event.sourceUrl} target="_blank" rel="noreferrer"
-                        style={{ fontSize: '0.75rem', color: 'var(--accent-light)', textDecoration: 'none' }}>
-                        {event.source}
-                      </a>
+                      <SourceBadge source={event.source} sourceUrl={event.sourceUrl} />
+                      {(event.eventUrl || event.ticketUrl) && (
+                        <div style={{ marginTop: '0.25rem' }}>
+                          <a
+                            href={event.eventUrl ?? event.ticketUrl ?? ''}
+                            target="_blank" rel="noreferrer"
+                            style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textDecoration: 'none' }}
+                          >
+                            View original →
+                          </a>
+                        </div>
+                      )}
                     </td>
                     <td style={{ fontSize: '0.7rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
                       {new Date(event.discoveredAt).toLocaleString()}
@@ -349,14 +403,40 @@ export default function DataMiningPage() {
 
           {/* Pagination */}
           {totalPages > 1 && (
-            <div className="d-flex justify-content-center align-items-center gap-2 py-3">
+            <div className="d-flex justify-content-center align-items-center gap-2 py-3 flex-wrap">
+              <button className="btn btn-sm btn-outline-secondary" disabled={page <= 1} onClick={() => setPage(1)}>
+                <i className="bi bi-chevron-double-left" />
+              </button>
               <button className="btn btn-sm btn-outline-secondary" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>
                 <i className="bi bi-chevron-left" />
               </button>
-              <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Page {page} of {totalPages}</span>
+              {/* Page number pills — show window of 5 around current */}
+              {Array.from({ length: totalPages }, (_, i) => i + 1)
+                .filter(p => p === 1 || p === totalPages || Math.abs(p - page) <= 2)
+                .reduce<(number | '...')[]>((acc, p, i, arr) => {
+                  if (i > 0 && (p as number) - (arr[i - 1] as number) > 1) acc.push('...')
+                  acc.push(p)
+                  return acc
+                }, [])
+                .map((p, i) => p === '...'
+                  ? <span key={`ellipsis-${i}`} style={{ fontSize: '0.8rem', color: 'var(--text-muted)', padding: '0 0.25rem' }}>…</span>
+                  : <button
+                      key={p}
+                      className={`btn btn-sm ${p === page ? 'btn-primary' : 'btn-outline-secondary'}`}
+                      onClick={() => setPage(p as number)}
+                      style={{ minWidth: '2rem' }}
+                    >{p}</button>
+                )
+              }
               <button className="btn btn-sm btn-outline-secondary" disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}>
                 <i className="bi bi-chevron-right" />
               </button>
+              <button className="btn btn-sm btn-outline-secondary" disabled={page >= totalPages} onClick={() => setPage(totalPages)}>
+                <i className="bi bi-chevron-double-right" />
+              </button>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginLeft: '0.5rem' }}>
+                {filtered.length} events · page {page}/{totalPages} · {PAGE_SIZE}/page
+              </span>
             </div>
           )}
         </div>
@@ -397,12 +477,15 @@ export default function DataMiningPage() {
                 { label: 'Price', value: selected.price != null ? `R${selected.price}` : '—' },
                 { label: 'Organiser', value: selected.organiser ?? '—' },
                 { label: 'Source', value: selected.source },
+
                 { label: 'Discovered', value: new Date(selected.discoveredAt).toLocaleString() },
                 { label: 'Status', value: selected.verificationStatus },
               ].map(({ label, value }) => (
                 <div key={label} className="col-6">
                   <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>
-                  <div style={{ fontSize: '0.85rem', fontWeight: 500 }}>{value}</div>
+                  {label === 'Source'
+                    ? <SourceBadge source={selected.source} sourceUrl={selected.sourceUrl} />
+                    : <div style={{ fontSize: '0.85rem', fontWeight: 500 }}>{value}</div>}
                 </div>
               ))}
             </div>
@@ -425,6 +508,10 @@ export default function DataMiningPage() {
               {selected.ticketUrl && <a href={selected.ticketUrl} target="_blank" rel="noreferrer" className="btn btn-sm btn-primary"><i className="bi bi-ticket me-1" />Tickets</a>}
               {selected.eventUrl && <a href={selected.eventUrl} target="_blank" rel="noreferrer" className="btn btn-sm btn-outline-secondary"><i className="bi bi-link-45deg me-1" />Event Page</a>}
               {selected.socialUrl && <a href={selected.socialUrl} target="_blank" rel="noreferrer" className="btn btn-sm btn-outline-secondary"><i className="bi bi-share me-1" />Social</a>}
+              {(selected.eventUrl || selected.ticketUrl || selected.socialUrl)
+                ? <a href={selected.eventUrl ?? selected.ticketUrl ?? selected.socialUrl ?? ''} target="_blank" rel="noreferrer" className="btn btn-sm btn-outline-primary"><i className="bi bi-box-arrow-up-right me-1" />View Original Event →</a>
+                : <span style={{ fontSize: '0.75rem', color: '#fbbf24' }}><i className="bi bi-exclamation-triangle me-1" />No source URL available</span>
+              }
             </div>
 
             <div className="d-flex gap-2 mt-3">
