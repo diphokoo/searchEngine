@@ -111,3 +111,9 @@ export const triggerMining = () =>
 
 export const fetchMiningResults = () =>
   api.get<{ events: MinedEvent[]; minedAt: string }>('/admin/mine/results').then(r => r.data)
+
+export const triggerFacebookMining = () =>
+  api.post<{ total: number; minedAt: string; events: MinedEvent[] }>('/admin/mine/facebook').then(r => r.data)
+
+export const fetchFacebookResults = () =>
+  api.get<{ events: MinedEvent[]; minedAt: string }>('/admin/mine/facebook').then(r => r.data)

@@ -548,79 +548,150 @@ async function mineInstagram(): Promise<MinedEvent[]> {
 }
 
 // ─── Facebook Connector ───────────────────────────────────────────────────────
-// Uses Facebook Graph API Events search.
-// Requires: pages_read_engagement, public_profile permissions.
-// Get App Token: https://developers.facebook.com/tools/explorer
+// Scrapes Facebook public event search pages — no API key required.
+// Facebook removed public event search from the Graph API in 2018.
+// We scrape the public search HTML and extract JSON-LD + embedded event data.
+
+const FB_SEARCH_QUERIES = [
+  'amapiano johannesburg',
+  'party cape town',
+  'nightlife pretoria',
+  'club night durban',
+  'festival south africa',
+  'concert johannesburg',
+  'dj event gauteng',
+  'gqom party',
+  'house music event',
+  'rooftop party johannesburg',
+  'sundowner cape town',
+  'ladies night pretoria',
+  'afrobeats durban',
+  'live music south africa',
+  'comedy show johannesburg',
+  'food festival cape town',
+  'outdoor event gauteng',
+  'wellness event johannesburg',
+  'market cape town',
+  'family event south africa',
+]
+
+function extractFacebookEvents(html: string, searchQuery: string): MinedEvent[] {
+  const events: MinedEvent[] = []
+
+  // Extract JSON-LD Event schema
+  for (const item of extractJsonLd(html)) {
+    const ev = mapJsonLd(item, 'Facebook Events', 'https://www.facebook.com/events', inferCategory(String(item['name'] ?? '')), 'facebook')
+    if (ev) events.push(ev)
+  }
+
+  // Extract embedded __bbox / __data JSON blobs Facebook inlines in HTML
+  const bboxMatches = html.matchAll(/"event_id":"(\d+)","name":"([^"]+)"/g)
+  for (const m of bboxMatches) {
+    const id = m[1]
+    const title = m[2].replace(/\\u([0-9a-f]{4})/gi, (_, c) => String.fromCharCode(parseInt(c, 16)))
+    if (!title || title.length < 3) continue
+    const eventUrl = `https://www.facebook.com/events/${id}`
+    const city = extractCityFromText(searchQuery)
+    events.push({
+      id: `facebook-${id}`,
+      title,
+      category: inferCategory(title),
+      date: null, startTime: null, endTime: null,
+      venue: null,
+      city,
+      province: city ? inferProvince(city) || null : null,
+      description: null, price: null,
+      ticketUrl: null,
+      eventUrl,
+      socialUrl: eventUrl,
+      imageUrl: null,
+      estimatedAttendance: null,
+      source: 'Facebook Events',
+      sourceUrl: eventUrl,
+      discoveredAt: new Date().toISOString(),
+      verificationStatus: 'NEEDS_REVIEW',
+      genres: [], artists: [], organiser: null,
+    })
+  }
+
+  // Extract from og:title / og:description meta tags on individual event pages
+  const ogTitle = extractMeta(html, 'og:title')
+  const ogDesc = extractMeta(html, 'og:description')
+  const ogImage = extractMeta(html, 'og:image')
+  const ogUrl = extractMeta(html, 'og:url')
+  if (ogTitle && ogUrl?.includes('/events/')) {
+    const city = extractCityFromText(ogDesc + ' ' + searchQuery)
+    const date = extractDateFromText(ogDesc)
+    events.push({
+      id: `facebook-og-${Buffer.from(ogUrl).toString('base64').slice(0, 12)}`,
+      title: ogTitle,
+      category: inferCategory(ogTitle),
+      date, startTime: null, endTime: null,
+      venue: null, city,
+      province: city ? inferProvince(city) || null : null,
+      description: ogDesc?.slice(0, 400) || null,
+      price: extractPriceFromText(ogDesc),
+      ticketUrl: null,
+      eventUrl: ogUrl,
+      socialUrl: ogUrl,
+      imageUrl: ogImage || null,
+      estimatedAttendance: null,
+      source: 'Facebook Events',
+      sourceUrl: ogUrl,
+      discoveredAt: new Date().toISOString(),
+      verificationStatus: detectVerificationStatus({ date, venue: null, city, title: ogTitle } as MinedEvent),
+      genres: [], artists: [], organiser: null,
+    })
+  }
+
+  return events
+}
+
+let facebookCache: { events: MinedEvent[]; minedAt: string } | null = null
 
 async function mineFacebook(): Promise<MinedEvent[]> {
-  const { facebookAppId, facebookAppSecret } = config.social
-  if (!facebookAppId || !facebookAppSecret) {
-    console.log('[mine] Facebook: no app credentials configured — skipping')
-    return []
-  }
-
   const events: MinedEvent[] = []
-  try {
-    // Get app access token
-    const tokenRes = await fetchJson(
-      `https://graph.facebook.com/oauth/access_token?client_id=${facebookAppId}&client_secret=${facebookAppSecret}&grant_type=client_credentials`
-    ) as { access_token?: string }
+  const seen = new Set<string>()
 
-    const appToken = tokenRes?.access_token
-    if (!appToken) throw new Error('Could not obtain Facebook app token')
-
-    // Search public events in SA cities
-    const searches = [
-      'amapiano johannesburg', 'party pretoria', 'club night cape town',
-      'festival durban', 'concert south africa', 'nightlife soweto'
-    ]
-
-    for (const q of searches) {
-      try {
-        const res = await fetchJson(
-          `https://graph.facebook.com/v19.0/search?type=event&q=${encodeURIComponent(q)}&fields=name,description,start_time,end_time,place,cover,ticket_uri&limit=10`,
-          appToken
-        ) as { data?: Record<string, unknown>[] }
-
-        for (const item of res?.data ?? []) {
-          const place = item['place'] as Record<string, unknown> | undefined
-          const location = place?.['location'] as Record<string, unknown> | undefined
-          const city = String(location?.['city'] ?? '')
-          const cover = item['cover'] as Record<string, unknown> | undefined
-
-          const ev: MinedEvent = {
-            id: `facebook-${item['id']}`,
-            title: String(item['name'] ?? ''),
-            category: 'Nightlife',
-            date: normalizeDate(item['start_time']),
-            startTime: normalizeTime(item['start_time']),
-            endTime: normalizeTime(item['end_time']),
-            venue: String(place?.['name'] ?? '') || null,
-            city: city || null,
-            province: city ? inferProvince(city) || null : null,
-            description: String(item['description'] ?? '').slice(0, 300) || null,
-            price: null,
-            ticketUrl: String(item['ticket_uri'] ?? '') || null,
-            eventUrl: `https://www.facebook.com/events/${item['id']}`,
-            socialUrl: `https://www.facebook.com/events/${item['id']}`,
-            imageUrl: String(cover?.['source'] ?? '') || null,
-            estimatedAttendance: null,
-            source: 'Facebook Events',
-            sourceUrl: 'https://www.facebook.com/events',
-            discoveredAt: new Date().toISOString(),
-            verificationStatus: 'DISCOVERED',
-            genres: [], artists: [], organiser: null,
-          }
-          ev.verificationStatus = detectVerificationStatus(ev)
-          if (ev.title) events.push(ev)
-        }
-      } catch (searchErr) {
-        console.error(`[mine] Facebook search "${q}" error:`, searchErr)
+  // Facebook blocks most scrapers — we use a browser-like UA and accept header
+  const fbFetch = (url: string) => new Promise<string>((resolve, reject) => {
+    const req = https.get(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-ZA,en;q=0.9',
+        'Accept-Encoding': 'identity',
+        'Cache-Control': 'no-cache',
+      },
+    }, (res) => {
+      if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        return fbFetch(res.headers.location).then(resolve).catch(reject)
       }
+      let data = ''
+      res.setEncoding('utf8')
+      res.on('data', c => { data += c })
+      res.on('end', () => resolve(data))
+    })
+    req.setTimeout(15000, () => { req.destroy(); reject(new Error('Timeout')) })
+    req.on('error', reject)
+  })
+
+  for (const q of FB_SEARCH_QUERIES) {
+    try {
+      const url = `https://www.facebook.com/search/events/?q=${encodeURIComponent(q)}`
+      const html = await fbFetch(url)
+      const found = extractFacebookEvents(html, q)
+      for (const ev of found) {
+        if (!seen.has(ev.id)) { seen.add(ev.id); events.push(ev) }
+      }
+      // Small delay to avoid rate limiting
+      await new Promise(r => setTimeout(r, 500))
+    } catch (e) {
+      console.error(`[mine] Facebook query "${q}" error:`, e)
     }
-  } catch (e) {
-    console.error('[mine] Facebook error:', e)
   }
+
+  facebookCache = { events, minedAt: new Date().toISOString() }
   console.log(`[mine] Facebook: found ${events.length} events`)
   return events
 }
@@ -930,5 +1001,20 @@ export async function miningRoutes(app: FastifyInstance) {
   app.get('/admin/mine/results', async (_req, reply) => {
     if (!miningCache) return reply.code(404).send({ error: 'No mining results yet. Run a mining job first.' })
     return miningCache
+  })
+
+  // Dedicated Facebook-only mine + results
+  app.post('/admin/mine/facebook', async (_req, reply) => {
+    reply.header('Content-Type', 'application/json')
+    console.log('[mine] Starting Facebook-only mining run...')
+    const events = await mineFacebook()
+    const deduped = deduplicate(events).slice(0, 1000)
+    facebookCache = { events: deduped, minedAt: new Date().toISOString() }
+    return { total: deduped.length, minedAt: facebookCache.minedAt, events: deduped }
+  })
+
+  app.get('/admin/mine/facebook', async (_req, reply) => {
+    if (!facebookCache) return reply.code(404).send({ error: 'No Facebook results yet. Run a Facebook mining job first.' })
+    return facebookCache
   })
 }

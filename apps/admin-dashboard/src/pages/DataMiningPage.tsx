@@ -1,6 +1,8 @@
 import { useState, useMemo } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { triggerMining, fetchMiningResults, type MinedEvent } from '../api/queries'
+import { triggerMining, fetchMiningResults, triggerFacebookMining, fetchFacebookResults, type MinedEvent } from '../api/queries'
+
+type Tab = 'all' | 'facebook'
 
 const PROVINCES = ['', 'Gauteng', 'Western Cape', 'KwaZulu-Natal', 'Eastern Cape', 'Free State', 'Limpopo', 'Mpumalanga', 'North West', 'Northern Cape']
 const CATEGORIES = ['', 'Nightlife', 'Concert / Festival', 'Club Night', 'Party', 'DJ Event', 'Live Music']
@@ -65,6 +67,7 @@ function StatBox({ label, value, color }: { label: string; value: number; color:
 
 export default function DataMiningPage() {
   const qc = useQueryClient()
+  const [tab, setTab] = useState<Tab>('all')
   const [search, setSearch] = useState('')
   const [filterProvince, setFilterProvince] = useState('')
   const [filterCity, setFilterCity] = useState('')
@@ -80,6 +83,11 @@ export default function DataMiningPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['mining-results'] }),
   })
 
+  const fbMut = useMutation({
+    mutationFn: triggerFacebookMining,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['facebook-results'] }),
+  })
+
   const { data: cached } = useQuery({
     queryKey: ['mining-results'],
     queryFn: fetchMiningResults,
@@ -87,11 +95,23 @@ export default function DataMiningPage() {
     retry: false,
   })
 
+  const { data: fbCached } = useQuery({
+    queryKey: ['facebook-results'],
+    queryFn: fetchFacebookResults,
+    enabled: !fbMut.isPending,
+    retry: false,
+  })
+
   const results = mineMut.data ?? (cached ? { ...cached, total: cached.events.length, verified: 0, needsReview: 0, discovered: 0, duplicatesRemoved: 0 } : null)
   const allEvents: MinedEvent[] = results?.events ?? []
 
+  const fbResults = fbMut.data ?? (fbCached ? { ...fbCached, total: fbCached.events.length } : null)
+  const fbEvents: MinedEvent[] = fbResults?.events ?? []
+
+  const activeEvents = tab === 'facebook' ? fbEvents : allEvents
+
   const filtered = useMemo(() => {
-    return allEvents.filter(e => {
+    return activeEvents.filter(e => {
       if (search && !`${e.title} ${e.venue ?? ''} ${e.city ?? ''}`.toLowerCase().includes(search.toLowerCase())) return false
       if (filterProvince && e.province !== filterProvince) return false
       if (filterCity && !(e.city ?? '').toLowerCase().includes(filterCity.toLowerCase())) return false
@@ -100,18 +120,18 @@ export default function DataMiningPage() {
       if (filterDate && e.date !== filterDate) return false
       return true
     })
-  }, [allEvents, search, filterProvince, filterCity, filterCategory, filterStatus, filterDate])
+  }, [activeEvents, search, filterProvince, filterCity, filterCategory, filterStatus, filterDate])
 
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE)
   const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
 
   const stats = useMemo(() => ({
-    total: allEvents.length,
-    verified: allEvents.filter(e => e.verificationStatus === 'VERIFIED').length,
-    needsReview: allEvents.filter(e => e.verificationStatus === 'NEEDS_REVIEW').length,
-    discovered: allEvents.filter(e => e.verificationStatus === 'DISCOVERED').length,
-    duplicatesRemoved: results?.duplicatesRemoved ?? 0,
-  }), [allEvents, results])
+    total: activeEvents.length,
+    verified: activeEvents.filter(e => e.verificationStatus === 'VERIFIED').length,
+    needsReview: activeEvents.filter(e => e.verificationStatus === 'NEEDS_REVIEW').length,
+    discovered: activeEvents.filter(e => e.verificationStatus === 'DISCOVERED').length,
+    duplicatesRemoved: tab === 'all' ? (results?.duplicatesRemoved ?? 0) : 0,
+  }), [activeEvents, results, tab])
 
   const resetFilters = () => {
     setSearch(''); setFilterProvince(''); setFilterCity('')
@@ -121,66 +141,125 @@ export default function DataMiningPage() {
   return (
     <div>
       {/* Header */}
-      <div className="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-4">
+      <div className="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-3">
         <div>
           <h5 style={{ fontWeight: 700, margin: 0 }}>Data Mining</h5>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', margin: 0 }}>
             Automatically discover SA nightlife events from public sources
           </p>
         </div>
-        <div className="d-flex align-items-center gap-2">
-          {results?.minedAt && (
+        <div className="d-flex align-items-center gap-2 flex-wrap">
+          {tab === 'all' && results?.minedAt && (
             <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
               Last run: {new Date(results.minedAt).toLocaleString()}
             </span>
           )}
-          <button
-            className="btn btn-primary d-flex align-items-center gap-2"
-            onClick={() => mineMut.mutate()}
-            disabled={mineMut.isPending}
-            style={{ fontWeight: 600 }}
-          >
-            {mineMut.isPending
-              ? <><span className="spinner-border spinner-border-sm" />Mining...</>
-              : <><i className="bi bi-database-fill-gear" />Data Mine Events</>
-            }
-          </button>
+          {tab === 'facebook' && fbResults?.minedAt && (
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+              Last run: {new Date(fbResults.minedAt).toLocaleString()}
+            </span>
+          )}
+          {tab === 'all' && (
+            <button
+              className="btn btn-primary d-flex align-items-center gap-2"
+              onClick={() => mineMut.mutate()}
+              disabled={mineMut.isPending || fbMut.isPending}
+              style={{ fontWeight: 600 }}
+            >
+              {mineMut.isPending
+                ? <><span className="spinner-border spinner-border-sm" />Mining...</>
+                : <><i className="bi bi-database-fill-gear" />Data Mine Events</>
+              }
+            </button>
+          )}
+          {tab === 'facebook' && (
+            <button
+              className="btn d-flex align-items-center gap-2"
+              onClick={() => fbMut.mutate()}
+              disabled={fbMut.isPending || mineMut.isPending}
+              style={{ fontWeight: 600, background: '#1877f2', color: '#fff', border: 'none' }}
+            >
+              {fbMut.isPending
+                ? <><span className="spinner-border spinner-border-sm" />Searching Facebook...</>
+                : <><i className="bi bi-facebook" />Search Facebook Events</>
+              }
+            </button>
+          )}
         </div>
       </div>
 
+      {/* Tabs */}
+      <div className="d-flex gap-1 mb-4" style={{ borderBottom: '1px solid var(--card-border)' }}>
+        {([
+          { id: 'all', label: 'All Sources', icon: 'bi-database-fill-gear', count: allEvents.length },
+          { id: 'facebook', label: 'Facebook Events', icon: 'bi-facebook', count: fbEvents.length, color: '#1877f2' },
+        ] as { id: Tab; label: string; icon: string; count: number; color?: string }[]).map(t => (
+          <button
+            key={t.id}
+            onClick={() => { setTab(t.id); setPage(1) }}
+            style={{
+              background: 'none', border: 'none', padding: '0.5rem 1rem',
+              borderBottom: tab === t.id ? `2px solid ${t.color ?? 'var(--accent)'}` : '2px solid transparent',
+              color: tab === t.id ? (t.color ?? 'var(--accent-light)') : 'var(--text-muted)',
+              fontWeight: tab === t.id ? 600 : 400,
+              fontSize: '0.875rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.4rem',
+              marginBottom: '-1px', transition: 'color 0.15s',
+            }}
+          >
+            <i className={`bi ${t.icon}`} />
+            {t.label}
+            {t.count > 0 && (
+              <span style={{
+                fontSize: '0.65rem', fontWeight: 700, padding: '0.1em 0.5em',
+                borderRadius: 20, background: tab === t.id ? (t.color ?? 'var(--accent)') + '22' : 'var(--card-bg)',
+                color: tab === t.id ? (t.color ?? 'var(--accent-light)') : 'var(--text-muted)',
+                border: '1px solid var(--card-border)',
+              }}>{t.count}</span>
+            )}
+          </button>
+        ))}
+      </div>
+
       {/* Mining progress */}
-      {mineMut.isPending && (
-        <div className="stat-card mb-4" style={{ borderColor: 'var(--accent)' }}>
+      {(mineMut.isPending || fbMut.isPending) && (
+        <div className="stat-card mb-4" style={{ borderColor: tab === 'facebook' ? '#1877f2' : 'var(--accent)' }}>
           <div className="d-flex align-items-center gap-3">
-            <div className="spinner-border text-primary" style={{ width: '1.5rem', height: '1.5rem' }} />
+            <div className="spinner-border" style={{ width: '1.5rem', height: '1.5rem', color: tab === 'facebook' ? '#1877f2' : 'var(--accent)' }} />
             <div>
-              <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>Mining in progress...</div>
+              <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>
+                {tab === 'facebook' ? 'Searching Facebook Events...' : 'Mining in progress...'}
+              </div>
               <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                Scanning Quicket · Howler · Webtickets · Eventbrite ZA · Instagram · Facebook · Twitter/X · TikTok
+                {tab === 'facebook'
+                  ? 'Scanning Facebook public event search across 20 SA nightlife queries'
+                  : 'Scanning Quicket · Howler · Webtickets · Eventbrite ZA · Instagram · Facebook · Twitter/X · TikTok'
+                }
               </div>
             </div>
           </div>
-          <div className="mt-3">
-            {['Quicket', 'Howler', 'Webtickets', 'Eventbrite ZA', 'Instagram', 'Facebook Events', 'Twitter/X', 'TikTok'].map(src => (
-              <div key={src} className="d-flex align-items-center gap-2 mb-1">
-                <div className="spinner-border spinner-border-sm text-secondary" style={{ width: '0.75rem', height: '0.75rem' }} />
-                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Scanning {src}...</span>
-              </div>
-            ))}
-          </div>
+          {tab === 'all' && (
+            <div className="mt-3">
+              {['Quicket', 'Howler', 'Webtickets', 'Eventbrite ZA', 'Instagram', 'Facebook Events', 'Twitter/X', 'TikTok'].map(src => (
+                <div key={src} className="d-flex align-items-center gap-2 mb-1">
+                  <div className="spinner-border spinner-border-sm text-secondary" style={{ width: '0.75rem', height: '0.75rem' }} />
+                  <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Scanning {src}...</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
       {/* Error */}
-      {mineMut.isError && (
+      {(mineMut.isError || fbMut.isError) && (
         <div className="alert-card mb-3">
           <i className="bi bi-exclamation-triangle me-2" />
-          Mining failed: {(mineMut.error as Error).message}
+          Mining failed: {((mineMut.error ?? fbMut.error) as Error).message}
         </div>
       )}
 
       {/* Stats */}
-      {results && (
+      {(tab === 'all' ? results : fbResults) && (
         <div className="d-flex flex-wrap gap-3 mb-4">
           <StatBox label="Total Discovered" value={stats.total} color="#a78bfa" />
           <StatBox label="Verified" value={stats.verified} color="#34d399" />
@@ -191,7 +270,7 @@ export default function DataMiningPage() {
       )}
 
       {/* Filters */}
-      {results && (
+      {(tab === 'all' ? results : fbResults) && (
         <div className="stat-card mb-3">
           <div className="row g-2 align-items-end">
             <div className="col-12 col-md-3">
@@ -232,16 +311,16 @@ export default function DataMiningPage() {
               </button>
             </div>
           </div>
-          {filtered.length !== allEvents.length && (
+          {filtered.length !== activeEvents.length && (
             <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
-              Showing {filtered.length} of {allEvents.length} events
+              Showing {filtered.length} of {activeEvents.length} events
             </div>
           )}
         </div>
       )}
 
       {/* Table */}
-      {results && (
+      {(tab === 'all' ? results : fbResults) && (
         <div className="data-table">
           <div style={{ overflowX: 'auto' }}>
             <table className="table table-hover mb-0" style={{ minWidth: 1200 }}>
@@ -391,8 +470,10 @@ export default function DataMiningPage() {
                 {paged.length === 0 && (
                   <tr>
                     <td colSpan={15} className="text-center py-5" style={{ color: 'var(--text-muted)' }}>
-                      {allEvents.length === 0
-                        ? <><i className="bi bi-database-fill-gear d-block mb-2" style={{ fontSize: '2rem' }} />Click "Data Mine Events" to start discovering events</>
+                      {activeEvents.length === 0
+                        ? <><i className={`bi ${tab === 'facebook' ? 'bi-facebook' : 'bi-database-fill-gear'} d-block mb-2`} style={{ fontSize: '2rem' }} />
+                            {tab === 'facebook' ? 'Click "Search Facebook Events" to discover Facebook events' : 'Click "Data Mine Events" to start discovering events'}
+                          </>
                         : 'No events match your filters'}
                     </td>
                   </tr>
