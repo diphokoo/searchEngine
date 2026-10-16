@@ -25,4 +25,13 @@ export const config = {
     region: process.env.AWS_REGION ?? 'af-south-1',
     endpoint: process.env.S3_ENDPOINT,
   },
+
+  social: {
+    instagramToken: process.env.INSTAGRAM_ACCESS_TOKEN ?? '',
+    facebookAppId: process.env.FACEBOOK_APP_ID ?? '',
+    facebookAppSecret: process.env.FACEBOOK_APP_SECRET ?? '',
+    twitterBearerToken: process.env.TWITTER_BEARER_TOKEN ?? '',
+    tiktokApiKey: process.env.TIKTOK_API_KEY ?? '',
+    tiktokApiSecret: process.env.TIKTOK_API_SECRET ?? '',
+  },
 }

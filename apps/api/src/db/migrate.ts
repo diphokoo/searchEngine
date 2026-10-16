@@ -142,7 +142,7 @@ const migrations = [
 
   // Default admin user (password: admin123 — change immediately)
   `INSERT INTO admin_users (email, name, password_hash, role)
-   VALUES ('admin@example.com', 'System Admin', '$2b$10$placeholder_change_me', 'SUPER_ADMIN')
+   VALUES ('diphokoo@outlook.com', 'System Admin', 'b4cb49ef4a35338f63994a1e4a2c9b73f5785a36abc30e9cf2a203d8fbb8709f', 'SUPER_ADMIN')
    ON CONFLICT (email) DO NOTHING`,
 ]
 

@@ -3,10 +3,12 @@ import cors from '@fastify/cors'
 import jwt from '@fastify/jwt'
 import { config } from './config.js'
 import { authRoutes } from './routes/auth.js'
+import { run as startScheduler } from './services/scheduler.js'
 import { adminEventRoutes } from './routes/events.js'
 import { sourceRoutes } from './routes/sources.js'
 import { adminRoutes } from './routes/admin.js'
 import { publicEventRoutes } from './routes/publicEvents.js'
+import { miningRoutes } from './routes/mining.js'
 
 const app = Fastify({ logger: { level: 'info' } })
 
@@ -22,6 +24,7 @@ await app.register(adminEventRoutes)
 await app.register(sourceRoutes)
 await app.register(adminRoutes)
 await app.register(publicEventRoutes)
+await app.register(miningRoutes)
 
 // Global error handler
 app.setErrorHandler((error, _req, reply) => {
@@ -39,6 +42,8 @@ app.setErrorHandler((error, _req, reply) => {
 try {
   await app.listen({ port: config.port, host: '0.0.0.0' })
   console.log(`🚀 API running on http://localhost:${config.port}`)
+  // Scheduler requires PostgreSQL + Redis — enable once infrastructure is running
+  // startScheduler().catch((err: Error) => app.log.error({ err }, 'Scheduler error'))
 } catch (err) {
   app.log.error(err)
   process.exit(1)

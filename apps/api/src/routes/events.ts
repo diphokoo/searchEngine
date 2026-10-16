@@ -47,37 +47,27 @@ export async function adminEventRoutes(app: FastifyInstance) {
   // List events with filters
   app.get('/admin/events', async (req) => {
     const f = EventFiltersSchema.parse(req.query)
-    const conditions: string[] = []
-    const params: unknown[] = []
-    let p = 1
-
-    if (f.status) { conditions.push(`status = $${p++}`); params.push(f.status) }
-    if (f.province) { conditions.push(`province = $${p++}`); params.push(f.province) }
-    if (f.city) { conditions.push(`city ILIKE $${p++}`); params.push(`%${f.city}%`) }
-    if (f.genre) { conditions.push(`$${p++} = ANY(genres)`); params.push(f.genre) }
-    if (f.search) { conditions.push(`title ILIKE $${p++}`); params.push(`%${f.search}%`) }
-    if (f.dateFrom) { conditions.push(`date >= $${p++}`); params.push(f.dateFrom) }
-    if (f.dateTo) { conditions.push(`date <= $${p++}`); params.push(f.dateTo) }
-
-    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
-    const offset = (f.page - 1) * f.pageSize
-
-    const [dataResult, countResult] = await Promise.all([
-      query(
-        `SELECT *, ST_Y(location::geometry) as lat, ST_X(location::geometry) as lng
-         FROM events ${where} ORDER BY created_at DESC LIMIT $${p} OFFSET $${p + 1}`,
-        [...params, f.pageSize, offset]
-      ),
-      query(`SELECT COUNT(*) FROM events ${where}`, params),
-    ])
-
-    const total = Number(countResult.rows[0].count)
-    return {
-      data: dataResult.rows.map(toEvent),
-      total,
-      page: f.page,
-      pageSize: f.pageSize,
-      totalPages: Math.ceil(total / f.pageSize),
+    try {
+      const conditions: string[] = []
+      const params: unknown[] = []
+      let p = 1
+      if (f.status) { conditions.push(`status = $${p++}`); params.push(f.status) }
+      if (f.province) { conditions.push(`province = $${p++}`); params.push(f.province) }
+      if (f.city) { conditions.push(`city ILIKE $${p++}`); params.push(`%${f.city}%`) }
+      if (f.genre) { conditions.push(`$${p++} = ANY(genres)`); params.push(f.genre) }
+      if (f.search) { conditions.push(`title ILIKE $${p++}`); params.push(`%${f.search}%`) }
+      if (f.dateFrom) { conditions.push(`date >= $${p++}`); params.push(f.dateFrom) }
+      if (f.dateTo) { conditions.push(`date <= $${p++}`); params.push(f.dateTo) }
+      const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+      const offset = (f.page - 1) * f.pageSize
+      const [dataResult, countResult] = await Promise.all([
+        query(`SELECT *, ST_Y(location::geometry) as lat, ST_X(location::geometry) as lng FROM events ${where} ORDER BY created_at DESC LIMIT $${p} OFFSET $${p + 1}`, [...params, f.pageSize, offset]),
+        query(`SELECT COUNT(*) FROM events ${where}`, params),
+      ])
+      const total = Number(countResult.rows[0].count)
+      return { data: dataResult.rows.map(toEvent), total, page: f.page, pageSize: f.pageSize, totalPages: Math.ceil(total / f.pageSize) }
+    } catch {
+      return { data: [], total: 0, page: f.page, pageSize: f.pageSize, totalPages: 0 }
     }
   })
 

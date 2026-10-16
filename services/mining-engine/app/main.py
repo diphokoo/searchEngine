@@ -1,7 +1,5 @@
 from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Optional
-import asyncio
 from .config import settings
 from .connectors.rss_connector import RSSConnector
 from .connectors.website_connector import WebsiteConnector
@@ -9,7 +7,7 @@ from .extractors.normalizer import normalize_event
 from .extractors.geocoder import geocode
 from .extractors.scorer import score_event
 from .extractors.ocr import extract_from_image_url
-from .models.event import ExtractedEvent, NormalizedEvent
+from .models.event import ExtractedEvent
 
 app = FastAPI(title=settings.app_name, version="1.0.0")
 
@@ -29,11 +27,9 @@ async def health():
 
 @app.post("/extract/url", dependencies=[Depends(verify_api_key)])
 async def extract_from_url(payload: dict):
-    """Extract events from a URL. Used by the Node.js API to trigger extraction."""
     url = payload.get("url")
     source_id = payload.get("sourceId", "manual")
     connector_type = payload.get("connectorType", "website")
-
     if not url:
         raise HTTPException(status_code=400, detail="url required")
 
@@ -58,7 +54,6 @@ async def extract_from_url(payload: dict):
 
 @app.post("/extract/image", dependencies=[Depends(verify_api_key)])
 async def extract_from_image(payload: dict):
-    """Run OCR + AI extraction on an image URL."""
     image_url = payload.get("imageUrl")
     source_id = payload.get("sourceId", "manual")
     if not image_url:
@@ -74,7 +69,6 @@ async def extract_from_image(payload: dict):
 
 @app.post("/normalize", dependencies=[Depends(verify_api_key)])
 async def normalize(raw: ExtractedEvent):
-    """Normalize a raw extracted event."""
     normalized = normalize_event(raw)
     coords = await geocode(normalized.venue, normalized.city, normalized.province.value if normalized.province else None)
     if coords:
