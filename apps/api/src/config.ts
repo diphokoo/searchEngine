@@ -34,4 +34,10 @@ export const config = {
     tiktokApiKey: process.env.TIKTOK_API_KEY ?? '',
     tiktokApiSecret: process.env.TIKTOK_API_SECRET ?? '',
   },
+
+  nightlife: {
+    // JSON string of a Firebase service account key for the NightLife project.
+    // Generate at: Firebase Console → Project Settings → Service Accounts → Generate new private key
+    serviceAccount: process.env.NIGHTLIFE_SERVICE_ACCOUNT ?? '',
+  },
 }

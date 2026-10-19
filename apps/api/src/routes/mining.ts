@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { requireAuth } from '../middleware/auth.js'
+import { query } from '../db/pool.js'
 import { config } from '../config.js'
 import https from 'https'
 import http from 'http'
@@ -1016,5 +1017,86 @@ export async function miningRoutes(app: FastifyInstance) {
   app.get('/admin/mine/facebook', async (_req, reply) => {
     if (!facebookCache) return reply.code(404).send({ error: 'No Facebook results yet. Run a Facebook mining job first.' })
     return facebookCache
+  })
+
+  // Approve a mined event: upsert into PostgreSQL then approve + sync to NightLife
+  app.post<{ Body: MinedEvent }>('/admin/mine/approve', async (req, reply) => {
+    const user = req.user as { id: string; name: string }
+    const ev = req.body
+    if (!ev?.title) return reply.code(400).send({ error: 'Invalid event data' })
+
+    // Upsert by source ID (ev.id is the stable mined key e.g. "quicket-abc123")
+    // Use ON CONFLICT on event_url or a generated stable key stored in raw_data
+    const upsertResult = await query(
+      `INSERT INTO events (
+        title, description, category, date, start_time, end_time,
+        venue, address, city, province, price, ticket_url, event_url,
+        image_url, organiser, artists, genres, sources,
+        confidence_score, status, raw_data, discovered_at
+      ) VALUES (
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,'NEEDS_REVIEW',$20,NOW()
+      )
+      ON CONFLICT DO NOTHING
+      RETURNING id`,
+      [
+        ev.title,
+        ev.description,
+        ev.category,
+        ev.date,
+        ev.startTime,
+        ev.endTime,
+        ev.venue,
+        null,
+        ev.city,
+        ev.province,
+        ev.price,
+        ev.ticketUrl,
+        ev.eventUrl ?? ev.socialUrl,
+        ev.imageUrl,
+        ev.organiser,
+        ev.artists ?? [],
+        ev.genres ?? [],
+        JSON.stringify([{ sourceName: ev.source, sourceUrl: ev.sourceUrl, platform: ev.source }]),
+        ev.verificationStatus === 'VERIFIED' ? 90 : ev.verificationStatus === 'NEEDS_REVIEW' ? 60 : 30,
+        JSON.stringify({ minedId: ev.id, source: ev.source, sourceUrl: ev.sourceUrl }),
+      ]
+    )
+
+    // If ON CONFLICT fired (duplicate event_url), look up the existing row
+    let pgId: string = upsertResult.rows[0]?.id
+    if (!pgId) {
+      const existing = await query(
+        `SELECT id FROM events WHERE event_url = $1 LIMIT 1`,
+        [ev.eventUrl ?? ev.socialUrl]
+      )
+      pgId = existing.rows[0]?.id
+    }
+    if (!pgId) return reply.code(500).send({ error: 'Failed to save event to database' })
+
+    // Now approve + sync using the existing approve logic
+    const { syncEventToNightlife } = await import('../services/nightlifeSync.js')
+    const { auditLog } = await import('../services/audit.js')
+
+    await query(
+      `UPDATE events SET status = 'APPROVED', nightlife_sync_status = 'pending', updated_at = NOW() WHERE id = $1 AND status NOT IN ('EXPIRED', 'CANCELLED')`,
+      [pgId]
+    )
+    await auditLog(user.id, user.name, 'APPROVE_EVENT', 'event', pgId)
+
+    const syncResult = await syncEventToNightlife(pgId)
+
+    await auditLog(user.id, user.name,
+      syncResult.status === 'synced' ? 'NIGHTLIFE_SYNC_SUCCESS' : 'NIGHTLIFE_SYNC_FAILED',
+      'event', pgId,
+      { syncStatus: syncResult.status, nightlifeEventId: syncResult.nightlifeEventId, error: syncResult.error }
+    )
+
+    return {
+      success: true,
+      pgEventId: pgId,
+      syncStatus: syncResult.status,
+      nightlifeEventId: syncResult.nightlifeEventId ?? null,
+      syncError: syncResult.status !== 'synced' ? syncResult.error : null,
+    }
   })
 }

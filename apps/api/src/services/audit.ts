@@ -8,9 +8,13 @@ export async function auditLog(
   entityId: string,
   details: Record<string, unknown> = {}
 ) {
-  await query(
-    `INSERT INTO audit_logs (user_id, user_name, action, entity_type, entity_id, details)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
-    [userId, userName, action, entityType, entityId, JSON.stringify(details)]
-  )
+  try {
+    await query(
+      `INSERT INTO audit_logs (user_id, user_name, action, entity_type, entity_id, details)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [userId, userName, action, entityType, entityId, JSON.stringify(details)]
+    )
+  } catch (err) {
+    console.error('[audit] Failed to write audit log (non-fatal):', err)
+  }
 }

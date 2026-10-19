@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { fetchEvent, approveEvent, rejectEvent, flagEvent, updateEvent } from '../api/queries'
+import { fetchEvent, approveEvent, rejectEvent, flagEvent, updateEvent, retrySyncEvent } from '../api/queries'
 import StatusBadge from '../components/StatusBadge'
 import ConfidenceScore from '../components/ConfidenceScore'
 import Spinner from '../components/Spinner'
@@ -27,6 +27,7 @@ export default function EventDetailPage() {
   const approveMut = useMutation({ mutationFn: () => approveEvent(id!), onSuccess: invalidate })
   const rejectMut = useMutation({ mutationFn: () => rejectEvent(id!, rejectReason), onSuccess: invalidate })
   const flagMut = useMutation({ mutationFn: () => flagEvent(id!, flagNote), onSuccess: invalidate })
+  const syncMut = useMutation({ mutationFn: () => retrySyncEvent(id!), onSuccess: invalidate })
   const updateMut = useMutation({
     mutationFn: () => updateEvent(id!, editData),
     onSuccess: () => { invalidate(); setEditing(false) }
@@ -152,8 +153,45 @@ export default function EventDetailPage() {
               disabled={approveMut.isPending}
             >
               <i className="bi bi-check-circle me-2" />
-              {approveMut.isPending ? 'Approving...' : 'Approve Event'}
+              {approveMut.isPending ? 'Approving & Syncing...' : 'Approve & Sync to NightLife'}
             </button>
+          )}
+
+          {/* NightLife sync status */}
+          {(event as unknown as Record<string, unknown>).nightlifeSyncStatus && (
+            <div className="mb-2 p-2 rounded" style={{
+              background: (event as unknown as Record<string, unknown>).nightlifeSyncStatus === 'synced'
+                ? 'rgba(25,135,84,0.15)'
+                : (event as unknown as Record<string, unknown>).nightlifeSyncStatus === 'failed' || (event as unknown as Record<string, unknown>).nightlifeSyncStatus === 'duplicate_review'
+                  ? 'rgba(220,53,69,0.15)'
+                  : 'rgba(255,193,7,0.15)',
+              fontSize: '0.8rem',
+            }}>
+              <div className="d-flex align-items-center gap-1 mb-1">
+                <i className={`bi ${
+                  (event as unknown as Record<string, unknown>).nightlifeSyncStatus === 'synced' ? 'bi-cloud-check-fill text-success'
+                  : (event as unknown as Record<string, unknown>).nightlifeSyncStatus === 'pending' ? 'bi-hourglass-split text-warning'
+                  : 'bi-cloud-slash-fill text-danger'
+                }`} />
+                <strong>NightLife: {String((event as unknown as Record<string, unknown>).nightlifeSyncStatus).replace('_', ' ')}</strong>
+              </div>
+              {(event as unknown as Record<string, unknown>).nightlifeEventId && (
+                <div style={{ color: 'var(--text-muted)' }}>ID: {String((event as unknown as Record<string, unknown>).nightlifeEventId)}</div>
+              )}
+              {(event as unknown as Record<string, unknown>).nightlifeSyncError && (
+                <div className="text-danger mt-1">{String((event as unknown as Record<string, unknown>).nightlifeSyncError)}</div>
+              )}
+              {(['failed', 'duplicate_review'] as string[]).includes(String((event as unknown as Record<string, unknown>).nightlifeSyncStatus)) && event.status === 'APPROVED' && (
+                <button
+                  className="btn btn-sm btn-outline-warning mt-2 w-100"
+                  onClick={() => syncMut.mutate()}
+                  disabled={syncMut.isPending}
+                >
+                  <i className="bi bi-arrow-clockwise me-1" />
+                  {syncMut.isPending ? 'Retrying...' : 'Retry Sync'}
+                </button>
+              )}
+            </div>
           )}
 
           <button className="btn btn-outline-secondary w-100 mb-2" onClick={() => setEditing(!editing)}>
@@ -232,6 +270,7 @@ export default function EventDetailPage() {
             { label: 'Created', value: new Date(event.createdAt).toLocaleString() },
             { label: 'Updated', value: new Date(event.updatedAt).toLocaleString() },
             { label: 'Coordinates', value: event.location.latitude ? `${event.location.latitude}, ${event.location.longitude}` : '—' },
+            { label: 'NightLife Synced', value: (event as unknown as Record<string, unknown>).nightlifeLastSyncedAt ? new Date(String((event as unknown as Record<string, unknown>).nightlifeLastSyncedAt)).toLocaleString() : '—' },
           ].map(({ label, value }) => (
             <div key={label} className="mb-2">
               <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>

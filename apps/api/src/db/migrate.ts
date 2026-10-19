@@ -1,3 +1,4 @@
+import 'dotenv/config'
 import { pool } from './pool.js'
 
 const migrations = [
@@ -140,10 +141,19 @@ const migrations = [
     created_at TIMESTAMPTZ DEFAULT NOW()
   )`,
 
-  // Default admin user (password: admin123 — change immediately)
-  `INSERT INTO admin_users (email, name, password_hash, role)
-   VALUES ('diphokoo@outlook.com', 'System Admin', 'b4cb49ef4a35338f63994a1e4a2c9b73f5785a36abc30e9cf2a203d8fbb8709f', 'SUPER_ADMIN')
-   ON CONFLICT (email) DO NOTHING`,
+  // NightLife sync columns (backward-compatible — safe to run on existing DB)
+  `ALTER TABLE events ADD COLUMN IF NOT EXISTS nightlife_event_id TEXT`,
+  `ALTER TABLE events ADD COLUMN IF NOT EXISTS nightlife_sync_status TEXT`,
+  `ALTER TABLE events ADD COLUMN IF NOT EXISTS nightlife_sync_error TEXT`,
+  `ALTER TABLE events ADD COLUMN IF NOT EXISTS nightlife_last_synced_at TIMESTAMPTZ`,
+  // Unique constraint prevents duplicate NightLife records from concurrent approvals
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_events_nightlife_event_id ON events(nightlife_event_id) WHERE nightlife_event_id IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS idx_events_nightlife_sync_status ON events(nightlife_sync_status)`,
+
+  // Default admin user — id must match the hardcoded JWT id in auth.ts
+  `INSERT INTO admin_users (id, email, name, password_hash, role)
+   VALUES ('00000000-0000-0000-0000-000000000001', 'diphokoo@outlook.com', 'System Admin', 'b4cb49ef4a35338f63994a1e4a2c9b73f5785a36abc30e9cf2a203d8fbb8709f', 'SUPER_ADMIN')
+   ON CONFLICT (email) DO UPDATE SET id = '00000000-0000-0000-0000-000000000001'`,
 ]
 
 async function migrate() {

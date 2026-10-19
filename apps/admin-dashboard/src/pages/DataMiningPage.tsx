@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { triggerMining, fetchMiningResults, triggerFacebookMining, fetchFacebookResults, type MinedEvent } from '../api/queries'
+import { triggerMining, fetchMiningResults, triggerFacebookMining, fetchFacebookResults, approveMiningEvent, type MinedEvent } from '../api/queries'
 
 type Tab = 'all' | 'facebook'
 
@@ -78,6 +78,34 @@ export default function DataMiningPage() {
   const [selected, setSelected] = useState<MinedEvent | null>(null)
   const PAGE_SIZE = 50
 
+  // Track approved mined event IDs (by their mined string id) and their sync result
+  const [approvedIds, setApprovedIds] = useState<Record<string, { syncStatus: string; nightlifeEventId: string | null; syncError: string | null }>>({}
+  )
+  const [approvingId, setApprovingId] = useState<string | null>(null)
+
+  const approveMut = useMutation({
+    mutationFn: approveMiningEvent,
+    onMutate: (ev) => setApprovingId(ev.id),
+    onSettled: () => setApprovingId(null),
+    onSuccess: (result, ev) => {
+      setApprovedIds(prev => ({
+        ...prev,
+        [ev.id]: {
+          syncStatus: result.syncStatus,
+          nightlifeEventId: result.nightlifeEventId,
+          syncError: result.syncError ?? null,
+        },
+      }))
+      // Close modal if the approved event was the selected one
+      setSelected(prev => prev?.id === ev.id ? null : prev)
+    },
+  })
+
+  const handleApprove = (ev: MinedEvent) => {
+    if (approvingId || approvedIds[ev.id]) return
+    approveMut.mutate(ev)
+  }
+
   const mineMut = useMutation({
     mutationFn: triggerMining,
     onSuccess: () => qc.invalidateQueries({ queryKey: ['mining-results'] }),
@@ -111,7 +139,7 @@ export default function DataMiningPage() {
   const activeEvents = tab === 'facebook' ? fbEvents : allEvents
 
   const filtered = useMemo(() => {
-    return activeEvents.filter(e => {
+    const result = activeEvents.filter(e => {
       if (search && !`${e.title} ${e.venue ?? ''} ${e.city ?? ''}`.toLowerCase().includes(search.toLowerCase())) return false
       if (filterProvince && e.province !== filterProvince) return false
       if (filterCity && !(e.city ?? '').toLowerCase().includes(filterCity.toLowerCase())) return false
@@ -120,7 +148,14 @@ export default function DataMiningPage() {
       if (filterDate && e.date !== filterDate) return false
       return true
     })
-  }, [activeEvents, search, filterProvince, filterCity, filterCategory, filterStatus, filterDate])
+    // Approved events sink to the bottom
+    return result.sort((a, b) => {
+      const aApproved = !!approvedIds[a.id]
+      const bApproved = !!approvedIds[b.id]
+      if (aApproved === bApproved) return 0
+      return aApproved ? 1 : -1
+    })
+  }, [activeEvents, search, filterProvince, filterCity, filterCategory, filterStatus, filterDate, approvedIds])
 
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE)
   const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
@@ -445,9 +480,25 @@ export default function DataMiningPage() {
                         <button
                           className="btn btn-sm"
                           title="Approve"
-                          style={{ padding: '0.15rem 0.4rem', background: 'rgba(52,211,153,0.15)', border: '1px solid rgba(52,211,153,0.3)', color: '#34d399' }}
+                          onClick={() => handleApprove(event)}
+                          disabled={!!approvingId || !!approvedIds[event.id]}
+                          style={{
+                            padding: '0.15rem 0.4rem',
+                            background: approvedIds[event.id]
+                              ? approvedIds[event.id].syncStatus === 'synced' ? 'rgba(52,211,153,0.3)' : 'rgba(251,191,36,0.3)'
+                              : 'rgba(52,211,153,0.15)',
+                            border: `1px solid ${approvedIds[event.id] ? (approvedIds[event.id].syncStatus === 'synced' ? 'rgba(52,211,153,0.6)' : 'rgba(251,191,36,0.6)') : 'rgba(52,211,153,0.3)'}`,
+                            color: approvedIds[event.id]
+                              ? approvedIds[event.id].syncStatus === 'synced' ? '#34d399' : '#fbbf24'
+                              : '#34d399',
+                          }}
                         >
-                          <i className="bi bi-check-lg" style={{ fontSize: '0.75rem' }} />
+                          {approvingId === event.id
+                            ? <span className="spinner-border spinner-border-sm" style={{ width: '0.65rem', height: '0.65rem' }} />
+                            : approvedIds[event.id]
+                              ? <i className={`bi ${approvedIds[event.id].syncStatus === 'synced' ? 'bi-check-circle-fill' : 'bi-exclamation-circle-fill'}`} style={{ fontSize: '0.75rem' }} />
+                              : <i className="bi bi-check-lg" style={{ fontSize: '0.75rem' }} />
+                          }
                         </button>
                         <button
                           className="btn btn-sm"
@@ -596,7 +647,35 @@ export default function DataMiningPage() {
             </div>
 
             <div className="d-flex gap-2 mt-3">
-              <button className="btn btn-success btn-sm flex-fill"><i className="bi bi-check-circle me-1" />Approve</button>
+              {approvedIds[selected.id] ? (
+                <div className="flex-fill p-2 rounded" style={{
+                  background: approvedIds[selected.id].syncStatus === 'synced' ? 'rgba(52,211,153,0.15)' : 'rgba(251,191,36,0.15)',
+                  border: `1px solid ${approvedIds[selected.id].syncStatus === 'synced' ? 'rgba(52,211,153,0.4)' : 'rgba(251,191,36,0.4)'}`,
+                  fontSize: '0.8rem',
+                }}>
+                  <div style={{ fontWeight: 600, color: approvedIds[selected.id].syncStatus === 'synced' ? '#34d399' : '#fbbf24' }}>
+                    <i className={`bi ${approvedIds[selected.id].syncStatus === 'synced' ? 'bi-cloud-check-fill' : 'bi-exclamation-triangle-fill'} me-1`} />
+                    {approvedIds[selected.id].syncStatus === 'synced' ? 'Approved & synced to NightLife' : `Approved — sync ${approvedIds[selected.id].syncStatus.replace('_', ' ')}`}
+                  </div>
+                  {approvedIds[selected.id].nightlifeEventId && (
+                    <div style={{ color: 'var(--text-muted)', marginTop: '0.2rem' }}>NightLife ID: {approvedIds[selected.id].nightlifeEventId}</div>
+                  )}
+                  {approvedIds[selected.id].syncError && (
+                    <div style={{ color: '#f87171', marginTop: '0.2rem' }}>{approvedIds[selected.id].syncError}</div>
+                  )}
+                </div>
+              ) : (
+                <button
+                  className="btn btn-success btn-sm flex-fill"
+                  onClick={() => handleApprove(selected)}
+                  disabled={approvingId === selected.id}
+                >
+                  {approvingId === selected.id
+                    ? <><span className="spinner-border spinner-border-sm me-1" style={{ width: '0.75rem', height: '0.75rem' }} />Approving...</>
+                    : <><i className="bi bi-check-circle me-1" />Approve & Sync to NightLife</>
+                  }
+                </button>
+              )}
               <button className="btn btn-warning btn-sm flex-fill"><i className="bi bi-flag me-1" />Flag</button>
               <button className="btn btn-danger btn-sm flex-fill"><i className="bi bi-x-circle me-1" />Reject</button>
             </div>

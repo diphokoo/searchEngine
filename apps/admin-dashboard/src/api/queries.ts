@@ -28,7 +28,7 @@ export const fetchEvent = (id: string) =>
   api.get<NightlifeEvent>(`/admin/events/${id}`).then(r => r.data)
 
 export const approveEvent = (id: string) =>
-  api.post(`/admin/events/${id}/approve`).then(r => r.data)
+  api.post<{ success: boolean; syncStatus: string; nightlifeEventId: string | null; syncError: string | null }>(`/admin/events/${id}/approve`).then(r => r.data)
 
 export const rejectEvent = (id: string, reason: string) =>
   api.post(`/admin/events/${id}/reject`, { reason }).then(r => r.data)
@@ -38,6 +38,12 @@ export const updateEvent = (id: string, data: Partial<NightlifeEvent>) =>
 
 export const flagEvent = (id: string, note: string) =>
   api.post(`/admin/events/${id}/flag`, { note }).then(r => r.data)
+
+export const retrySyncEvent = (id: string) =>
+  api.post<{ success: boolean; syncStatus: string; nightlifeEventId: string | null; syncError: string | null }>(`/admin/events/${id}/sync`).then(r => r.data)
+
+export const approveMiningEvent = (event: MinedEvent) =>
+  api.post<{ success: boolean; pgEventId: string; syncStatus: string; nightlifeEventId: string | null; syncError: string | null }>('/admin/mine/approve', event).then(r => r.data)
 
 // ─── Sources ──────────────────────────────────────────────────────────────────
 export const fetchSources = (params: Record<string, string | number> = {}) =>

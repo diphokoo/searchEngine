@@ -4,6 +4,7 @@ import { queues } from '../db/queues.js'
 import { requireAuth } from '../middleware/auth.js'
 import { EventFiltersSchema, UpdateEventSchema, NearbyEventsSchema } from '../schemas/index.js'
 import { auditLog } from '../services/audit.js'
+import { syncEventToNightlife } from '../services/nightlifeSync.js'
 
 function toEvent(row: Record<string, unknown>) {
   return {
@@ -38,6 +39,11 @@ function toEvent(row: Record<string, unknown>) {
     lastVerifiedAt: row.last_verified_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    // NightLife sync metadata
+    nightlifeSyncStatus: row.nightlife_sync_status ?? null,
+    nightlifeEventId: row.nightlife_event_id ?? null,
+    nightlifeSyncError: row.nightlife_sync_error ?? null,
+    nightlifeLastSyncedAt: row.nightlife_last_synced_at ?? null,
   }
 }
 
@@ -110,16 +116,71 @@ export async function adminEventRoutes(app: FastifyInstance) {
     return toEvent(result.rows[0])
   })
 
-  // Approve event
+  // Approve event + trigger NightLife sync
   app.post<{ Params: { id: string } }>('/admin/events/:id/approve', async (req, reply) => {
     const user = req.user as { id: string; name: string }
-    const result = await query(
-      `UPDATE events SET status = 'APPROVED', updated_at = NOW() WHERE id = $1 AND status NOT IN ('EXPIRED', 'CANCELLED') RETURNING id`,
+
+    // Idempotency: if already approved+synced, just re-sync (safe retry)
+    const existing = await query(
+      `SELECT id, status, nightlife_sync_status FROM events WHERE id = $1`,
       [req.params.id]
     )
-    if (!result.rows[0]) return reply.code(404).send({ error: 'Event not found or cannot be approved' })
-    await auditLog(user.id, user.name, 'APPROVE_EVENT', 'event', req.params.id)
-    return { success: true }
+    if (!existing.rows[0]) return reply.code(404).send({ error: 'Event not found or cannot be approved' })
+
+    const alreadyApproved = existing.rows[0].status === 'APPROVED'
+
+    if (!alreadyApproved) {
+      const result = await query(
+        `UPDATE events SET status = 'APPROVED', nightlife_sync_status = 'pending', updated_at = NOW() WHERE id = $1 AND status NOT IN ('EXPIRED', 'CANCELLED') RETURNING id`,
+        [req.params.id]
+      )
+      if (!result.rows[0]) return reply.code(404).send({ error: 'Event not found or cannot be approved' })
+      await auditLog(user.id, user.name, 'APPROVE_EVENT', 'event', req.params.id)
+    }
+
+    // Sync to NightLife (synchronous — fast enough for UI feedback)
+    const syncResult = await syncEventToNightlife(req.params.id)
+
+    if (syncResult.status !== 'synced') {
+      await auditLog(user.id, user.name, 'NIGHTLIFE_SYNC_FAILED', 'event', req.params.id, {
+        syncStatus: syncResult.status,
+        error: syncResult.error,
+      })
+    } else {
+      await auditLog(user.id, user.name, 'NIGHTLIFE_SYNC_SUCCESS', 'event', req.params.id, {
+        nightlifeEventId: syncResult.nightlifeEventId,
+      })
+    }
+
+    return {
+      success: true,
+      syncStatus: syncResult.status,
+      nightlifeEventId: syncResult.nightlifeEventId ?? null,
+      syncError: syncResult.status !== 'synced' ? syncResult.error : null,
+    }
+  })
+
+  // Retry NightLife sync for an already-approved event
+  app.post<{ Params: { id: string } }>('/admin/events/:id/sync', async (req, reply) => {
+    const user = req.user as { id: string; name: string }
+    const check = await query(`SELECT status FROM events WHERE id = $1`, [req.params.id])
+    if (!check.rows[0]) return reply.code(404).send({ error: 'Event not found' })
+    if (check.rows[0].status !== 'APPROVED') {
+      return reply.code(400).send({ error: 'Only approved events can be synced' })
+    }
+    await query(`UPDATE events SET nightlife_sync_status = 'pending', updated_at = NOW() WHERE id = $1`, [req.params.id])
+    const syncResult = await syncEventToNightlife(req.params.id)
+    await auditLog(user.id, user.name, 'NIGHTLIFE_SYNC_RETRY', 'event', req.params.id, {
+      syncStatus: syncResult.status,
+      nightlifeEventId: syncResult.nightlifeEventId,
+      error: syncResult.error,
+    })
+    return {
+      success: syncResult.status === 'synced',
+      syncStatus: syncResult.status,
+      nightlifeEventId: syncResult.nightlifeEventId ?? null,
+      syncError: syncResult.status !== 'synced' ? syncResult.error : null,
+    }
   })
 
   // Reject event
