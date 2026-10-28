@@ -45,6 +45,12 @@ export const retrySyncEvent = (id: string) =>
 export const approveMiningEvent = (event: MinedEvent) =>
   api.post<{ success: boolean; pgEventId: string; syncStatus: string; nightlifeEventId: string | null; syncError: string | null }>('/admin/mine/approve', event).then(r => r.data)
 
+export const flagMiningEvent = (event: MinedEvent, note = 'Flagged from data mining') =>
+  api.post<{ success: boolean }>('/admin/mine/flag', { ...event, note }).then(r => r.data)
+
+export const rejectMiningEvent = (event: MinedEvent, reason = 'Rejected from data mining') =>
+  api.post<{ success: boolean }>('/admin/mine/reject', { ...event, reason }).then(r => r.data)
+
 // ─── Sources ──────────────────────────────────────────────────────────────────
 export const fetchSources = (params: Record<string, string | number> = {}) =>
   api.get<PaginatedResponse<EventSource_>>('/admin/sources', { params }).then(r => r.data)

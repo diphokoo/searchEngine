@@ -57,7 +57,15 @@ export async function adminEventRoutes(app: FastifyInstance) {
       const conditions: string[] = []
       const params: unknown[] = []
       let p = 1
-      if (f.status) { conditions.push(`status = $${p++}`); params.push(f.status) }
+      if (f.status) {
+        conditions.push(`status = $${p++}`)
+        params.push(f.status)
+        // Keep review items visible through their scheduled end time, then
+        // automatically remove past events from the active review queue.
+        if (f.status === 'NEEDS_REVIEW') {
+          conditions.push(`(date IS NULL OR date > CURRENT_DATE OR (date = CURRENT_DATE AND (end_time IS NULL OR end_time >= LOCALTIME)))`)
+        }
+      }
       if (f.province) { conditions.push(`province = $${p++}`); params.push(f.province) }
       if (f.city) { conditions.push(`city ILIKE $${p++}`); params.push(`%${f.city}%`) }
       if (f.genre) { conditions.push(`$${p++} = ANY(genres)`); params.push(f.genre) }
