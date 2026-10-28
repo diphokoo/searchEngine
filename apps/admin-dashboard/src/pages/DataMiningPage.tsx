@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { triggerMining, fetchMiningResults, triggerFacebookMining, fetchFacebookResults, approveMiningEvent, type MinedEvent } from '../api/queries'
+import { triggerMining, fetchMiningResults, triggerFacebookMining, fetchFacebookResults, approveMiningEvent, flagMiningEvent, rejectMiningEvent, type MinedEvent } from '../api/queries'
 
 type Tab = 'all' | 'facebook'
 
@@ -96,14 +96,50 @@ export default function DataMiningPage() {
           syncError: result.syncError ?? null,
         },
       }))
-      // Close modal if the approved event was the selected one
+      // Close the modal and refresh both mining lists. The API also removes the
+      // event from its in-memory caches and the decision ledger prevents rediscovery.
       setSelected(prev => prev?.id === ev.id ? null : prev)
+      void Promise.all([
+        qc.invalidateQueries({ queryKey: ['mining-results'] }),
+        qc.invalidateQueries({ queryKey: ['facebook-results'] }),
+      ])
+    },
+    onError: (error) => {
+      console.error('Failed to approve mined event', error)
+      window.alert('Could not approve this event. Please try again.')
     },
   })
 
   const handleApprove = (ev: MinedEvent) => {
     if (approvingId || approvedIds[ev.id]) return
     approveMut.mutate(ev)
+  }
+
+  const [decisionBusyId, setDecisionBusyId] = useState<string | null>(null)
+  // Keep successful review/reject decisions hidden even if a cached mining response
+  // still contains the event while the background refetch is running.
+  const [removedDecisionIds, setRemovedDecisionIds] = useState<Record<string, true>>({})
+
+  const handleDecision = async (ev: MinedEvent, decision: 'flag' | 'reject') => {
+    if (decisionBusyId) return
+    setDecisionBusyId(ev.id)
+    try {
+      if (decision === 'flag') await flagMiningEvent(ev)
+      else await rejectMiningEvent(ev)
+      // Remove the event from the visible mining list immediately after the API
+      // confirms the decision; do not wait for React Query's refetch to finish.
+      setRemovedDecisionIds(current => ({ ...current, [ev.id]: true }))
+      setSelected(current => current?.id === ev.id ? null : current)
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['mining-results'] }),
+        qc.invalidateQueries({ queryKey: ['facebook-results'] }),
+      ])
+    } catch (error) {
+      console.error(`Failed to ${decision} mined event`, error)
+      window.alert(`Could not ${decision} this event. Please try again.`)
+    } finally {
+      setDecisionBusyId(null)
+    }
   }
 
   const mineMut = useMutation({
@@ -137,9 +173,10 @@ export default function DataMiningPage() {
   const fbEvents: MinedEvent[] = fbResults?.events ?? []
 
   const activeEvents = tab === 'facebook' ? fbEvents : allEvents
+  const visibleEvents = activeEvents.filter(event => !removedDecisionIds[event.id])
 
   const filtered = useMemo(() => {
-    const result = activeEvents.filter(e => {
+    const result = visibleEvents.filter(e => {
       if (search && !`${e.title} ${e.venue ?? ''} ${e.city ?? ''}`.toLowerCase().includes(search.toLowerCase())) return false
       if (filterProvince && e.province !== filterProvince) return false
       if (filterCity && !(e.city ?? '').toLowerCase().includes(filterCity.toLowerCase())) return false
@@ -155,18 +192,18 @@ export default function DataMiningPage() {
       if (aApproved === bApproved) return 0
       return aApproved ? 1 : -1
     })
-  }, [activeEvents, search, filterProvince, filterCity, filterCategory, filterStatus, filterDate, approvedIds])
+  }, [visibleEvents, search, filterProvince, filterCity, filterCategory, filterStatus, filterDate, approvedIds])
 
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE)
   const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
 
   const stats = useMemo(() => ({
-    total: activeEvents.length,
-    verified: activeEvents.filter(e => e.verificationStatus === 'VERIFIED').length,
-    needsReview: activeEvents.filter(e => e.verificationStatus === 'NEEDS_REVIEW').length,
-    discovered: activeEvents.filter(e => e.verificationStatus === 'DISCOVERED').length,
+    total: visibleEvents.length,
+    verified: visibleEvents.filter(e => e.verificationStatus === 'VERIFIED').length,
+    needsReview: visibleEvents.filter(e => e.verificationStatus === 'NEEDS_REVIEW').length,
+    discovered: visibleEvents.filter(e => e.verificationStatus === 'DISCOVERED').length,
     duplicatesRemoved: tab === 'all' ? (results?.duplicatesRemoved ?? 0) : 0,
-  }), [activeEvents, results, tab])
+  }), [visibleEvents, results, tab])
 
   const resetFilters = () => {
     setSearch(''); setFilterProvince(''); setFilterCity('')
@@ -504,6 +541,8 @@ export default function DataMiningPage() {
                           className="btn btn-sm"
                           title="Flag for review"
                           style={{ padding: '0.15rem 0.4rem', background: 'rgba(251,191,36,0.15)', border: '1px solid rgba(251,191,36,0.3)', color: '#fbbf24' }}
+                          onClick={() => handleDecision(event, 'flag')}
+                          disabled={decisionBusyId === event.id}
                         >
                           <i className="bi bi-flag" style={{ fontSize: '0.75rem' }} />
                         </button>
@@ -511,6 +550,8 @@ export default function DataMiningPage() {
                           className="btn btn-sm"
                           title="Reject"
                           style={{ padding: '0.15rem 0.4rem', background: 'rgba(248,113,113,0.15)', border: '1px solid rgba(248,113,113,0.3)', color: '#f87171' }}
+                          onClick={() => handleDecision(event, 'reject')}
+                          disabled={decisionBusyId === event.id}
                         >
                           <i className="bi bi-x-lg" style={{ fontSize: '0.75rem' }} />
                         </button>
@@ -676,8 +717,8 @@ export default function DataMiningPage() {
                   }
                 </button>
               )}
-              <button className="btn btn-warning btn-sm flex-fill"><i className="bi bi-flag me-1" />Flag</button>
-              <button className="btn btn-danger btn-sm flex-fill"><i className="bi bi-x-circle me-1" />Reject</button>
+              <button className="btn btn-warning btn-sm flex-fill" onClick={() => selected && handleDecision(selected, 'flag')} disabled={!!selected && decisionBusyId === selected.id}><i className="bi bi-flag me-1" />Flag</button>
+              <button className="btn btn-danger btn-sm flex-fill" onClick={() => selected && handleDecision(selected, 'reject')} disabled={!!selected && decisionBusyId === selected.id}><i className="bi bi-x-circle me-1" />Reject</button>
             </div>
           </div>
         </div>

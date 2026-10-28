@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { requireAuth } from '../middleware/auth.js'
 import { query } from '../db/pool.js'
+import { auditLog } from '../services/audit.js'
 import { config } from '../config.js'
 import https from 'https'
 import http from 'http'
@@ -940,6 +941,125 @@ function deduplicate(events: MinedEvent[]): MinedEvent[] {
 
 // ─── Route ────────────────────────────────────────────────────────────────────
 
+async function filterPreviouslyDecided(events: MinedEvent[]): Promise<MinedEvent[]> {
+  if (!events.length) return events
+  const result = await query(
+    `SELECT mined_id, title, event_date, venue, city, source_url, event_url
+       FROM mining_event_decisions`
+  )
+  const normalize = (value: unknown) => String(value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '')
+  const normalizeUrl = (value: unknown) => String(value ?? '').trim().replace(/#.*$/, '').replace(/\/$/, '').toLowerCase()
+  const decisions = result.rows as Record<string, unknown>[]
+  const ids = new Set(decisions.map(r => String(r.mined_id ?? '')).filter(Boolean))
+  const eventUrls = new Set(decisions.map(r => normalizeUrl(r.event_url)).filter(Boolean))
+  const decisionKeys = new Set(decisions.filter(r => r.event_date).map(r =>
+    [normalize(r.title), String(r.event_date).slice(0, 10), normalize(r.venue), normalize(r.city)].join('|')
+  ))
+  return events.filter(ev => {
+    const candidateUrls = [ev.eventUrl, ev.socialUrl, ev.ticketUrl].map(normalizeUrl).filter(Boolean)
+    const key = [normalize(ev.title), String(ev.date ?? ''), normalize(ev.venue), normalize(ev.city)].join('|')
+    const sameIdentity = !!ev.date && decisionKeys.has(key)
+    // A source URL can be a generic listing page shared by many events, so only
+    // use it alongside the full event identity. Event-specific URLs are strong keys.
+    const sameSourceAndIdentity = !!ev.sourceUrl && decisions.some(r =>
+      normalizeUrl(r.source_url) === normalizeUrl(ev.sourceUrl) &&
+      !!r.event_date && [normalize(r.title), String(r.event_date).slice(0, 10), normalize(r.venue), normalize(r.city)].join('|') === key
+    )
+    return !ids.has(String(ev.id ?? '')) && !candidateUrls.some(url => eventUrls.has(url)) && !sameIdentity && !sameSourceAndIdentity
+  })
+}
+
+async function saveMiningDecision(
+  ev: MinedEvent,
+  decision: 'APPROVED' | 'NEEDS_REVIEW' | 'REJECTED',
+  userId: string,
+  note?: string,
+  postgresEventId?: string,
+) {
+  // Reuse an existing decision for this exact mined event instead of creating
+  // another row when a user flags the same event more than once.
+  const eventUrl = ev.eventUrl ?? ev.socialUrl ?? ev.ticketUrl ?? null
+  const existing = await query(
+    `SELECT id FROM mining_event_decisions
+      WHERE ($1::text IS NOT NULL AND mined_id = $1)
+         OR ($2::text IS NOT NULL AND $2 <> '' AND event_url = $2)
+         OR ($4::date IS NOT NULL AND title = $3 AND event_date = $4::date
+             AND venue IS NOT DISTINCT FROM $5::text AND city IS NOT DISTINCT FROM $6::text)
+      ORDER BY decided_at DESC LIMIT 1`,
+    [ev.id ?? null, eventUrl, ev.title, ev.date || null, ev.venue ?? null, ev.city ?? null],
+  )
+  if (existing.rows[0]) {
+    await query(
+      `UPDATE mining_event_decisions
+          SET mined_id = COALESCE($2, mined_id), decision = $3, title = $4,
+              event_date = $5, venue = $6, city = $7, source_url = $8,
+              event_url = $9, event_payload = $10::jsonb, note = $11,
+              postgres_event_id = COALESCE($12::uuid, postgres_event_id),
+              decided_by = $13, decided_at = NOW()
+        WHERE id = $1`,
+      [existing.rows[0].id, ev.id ?? null, decision, ev.title, ev.date || null,
+        ev.venue ?? null, ev.city ?? null, ev.sourceUrl ?? null, eventUrl,
+        JSON.stringify(ev), note ?? null, postgresEventId ?? null, userId],
+    )
+    return
+  }
+  await query(
+    `INSERT INTO mining_event_decisions
+      (mined_id, decision, title, event_date, venue, city, source_url, event_url,
+       event_payload, note, postgres_event_id, decided_by, decided_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NOW())`,
+    [ev.id ?? null, decision, ev.title, ev.date || null, ev.venue ?? null, ev.city ?? null,
+      ev.sourceUrl ?? null, eventUrl, JSON.stringify(ev), note ?? null, postgresEventId ?? null, userId],
+  )
+}
+
+// The review queue reads from `events` (status = NEEDS_REVIEW), whereas raw
+// mining results are transient. Persist flagged mined events in that same source.
+// Match on the stable mined id first, then a canonical URL, then the complete
+// title/date/venue/city identity so similarly named events are not conflated.
+async function upsertMinedReviewEvent(ev: MinedEvent): Promise<string> {
+  const eventUrl = ev.eventUrl ?? ev.socialUrl ?? ev.ticketUrl ?? null
+  const existing = await query(
+    `SELECT id FROM events
+      WHERE raw_data->>'minedId' = $1
+         OR ($2::text IS NOT NULL AND $2 <> '' AND event_url = $2)
+         OR ($4::date IS NOT NULL AND title = $3 AND date = $4::date
+             AND venue IS NOT DISTINCT FROM $5::text AND city IS NOT DISTINCT FROM $6::text)
+      ORDER BY updated_at DESC LIMIT 1`,
+    [ev.id ?? null, eventUrl, ev.title, ev.date || null, ev.venue ?? null, ev.city ?? null],
+  )
+  if (existing.rows[0]) {
+    const id = String(existing.rows[0].id)
+    await query(
+      `UPDATE events SET status = 'NEEDS_REVIEW',
+          raw_data = COALESCE(raw_data, '{}'::jsonb) || $2::jsonb,
+          updated_at = NOW()
+        WHERE id = $1`,
+      [id, JSON.stringify({ minedId: ev.id, source: ev.source, sourceUrl: ev.sourceUrl, reviewFlagged: true })],
+    )
+    return id
+  }
+
+  const inserted = await query(
+    `INSERT INTO events (
+      title, description, category, date, start_time, end_time, venue, city,
+      province, price, ticket_url, event_url, image_url, organiser, artists,
+      genres, sources, confidence_score, status, raw_data, discovered_at
+    ) VALUES (
+      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
+      'NEEDS_REVIEW',$19::jsonb,NOW()
+    ) RETURNING id`,
+    [ev.title, ev.description, ev.category, ev.date || null, ev.startTime || null,
+      ev.endTime || null, ev.venue ?? null, ev.city ?? null, ev.province ?? null,
+      ev.price ?? null, ev.ticketUrl ?? null, eventUrl, ev.imageUrl ?? null,
+      ev.organiser ?? null, ev.artists ?? [], ev.genres ?? [],
+      JSON.stringify([{ sourceName: ev.source, sourceUrl: ev.sourceUrl, platform: ev.source }]),
+      ev.verificationStatus === 'VERIFIED' ? 90 : ev.verificationStatus === 'NEEDS_REVIEW' ? 60 : 30,
+      JSON.stringify({ minedId: ev.id, source: ev.source, sourceUrl: ev.sourceUrl, reviewFlagged: true })],
+  )
+  return String(inserted.rows[0].id)
+}
+
 export async function miningRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAuth)
 
@@ -969,7 +1089,7 @@ export async function miningRoutes(app: FastifyInstance) {
       ...(tiktok.status === 'fulfilled' ? tiktok.value : []),
     ]
 
-    const deduped = deduplicate(all)
+    const deduped = (await filterPreviouslyDecided(deduplicate(all)))
       .sort((a, b) => scoreEvent(b, '') - scoreEvent(a, '')) // best data quality first
       .slice(0, 1000) // support up to 1,000 entries
 
@@ -1009,7 +1129,7 @@ export async function miningRoutes(app: FastifyInstance) {
     reply.header('Content-Type', 'application/json')
     console.log('[mine] Starting Facebook-only mining run...')
     const events = await mineFacebook()
-    const deduped = deduplicate(events).slice(0, 1000)
+    const deduped = (await filterPreviouslyDecided(deduplicate(events))).slice(0, 1000)
     facebookCache = { events: deduped, minedAt: new Date().toISOString() }
     return { total: deduped.length, minedAt: facebookCache.minedAt, events: deduped }
   })
@@ -1084,6 +1204,12 @@ export async function miningRoutes(app: FastifyInstance) {
     await auditLog(user.id, user.name, 'APPROVE_EVENT', 'event', pgId)
 
     const syncResult = await syncEventToNightlife(pgId)
+    await saveMiningDecision(ev, 'APPROVED', user.id, undefined, pgId)
+
+    // Remove approved events from both active mining lists. The persistent decision
+    // ledger also excludes them from subsequent mining runs.
+    if (miningCache) miningCache.events = miningCache.events.filter(item => item.id !== ev.id)
+    if (facebookCache) facebookCache.events = facebookCache.events.filter(item => item.id !== ev.id)
 
     await auditLog(user.id, user.name,
       syncResult.status === 'synced' ? 'NIGHTLIFE_SYNC_SUCCESS' : 'NIGHTLIFE_SYNC_FAILED',
@@ -1099,4 +1225,48 @@ export async function miningRoutes(app: FastifyInstance) {
       syncError: syncResult.status !== 'synced' ? syncResult.error : null,
     }
   })
+  app.post<{ Body: MinedEvent & { note?: string } }>('/admin/mine/flag', async (req, reply) => {
+    const user = req.user as { id: string; name: string }
+    const ev = req.body
+    if (!ev?.title) return reply.code(400).send({ error: 'Invalid event data' })
+    // Save to the canonical events table first so /events/review sees the
+    // flagged item immediately, then persist its mining decision for future runs.
+    const pgEventId = await upsertMinedReviewEvent(ev)
+    await saveMiningDecision(ev, 'NEEDS_REVIEW', user.id, ev.note ?? 'Flagged from data mining', pgEventId)
+    if (miningCache) miningCache.events = miningCache.events.filter(item => item.id !== ev.id)
+    if (facebookCache) facebookCache.events = facebookCache.events.filter(item => item.id !== ev.id)
+    // Audit logging must be non-blocking, just like the working approval flow.
+    // A logging failure should never make a successfully saved decision appear to fail.
+    try {
+      await auditLog(user.id, user.name, 'FLAG_MINING_EVENT', 'event', String(ev.id ?? ev.title), {
+        title: ev.title,
+        note: ev.note ?? 'Flagged from data mining',
+        minedId: ev.id ?? null,
+        postgresEventId: pgEventId,
+      })
+    } catch (error) {
+      // The persisted review decision is the source of truth; audit failures
+      // must not make a successful flag action appear to have failed.
+      console.error('[mine] Flag saved, but audit logging failed:', error)
+    }
+    return { success: true, pgEventId }
+  })
+
+  app.post<{ Body: MinedEvent & { reason?: string } }>('/admin/mine/reject', async (req, reply) => {
+    const user = req.user as { id: string; name: string }
+    const ev = req.body
+    if (!ev?.title) return reply.code(400).send({ error: 'Invalid event data' })
+    await saveMiningDecision(ev, 'REJECTED', user.id, ev.reason ?? 'Rejected from data mining')
+    if (miningCache) miningCache.events = miningCache.events.filter(item => item.id !== ev.id)
+    if (facebookCache) facebookCache.events = facebookCache.events.filter(item => item.id !== ev.id)
+    // Keep audit logging non-blocking so the rejection response reflects the
+    // persisted decision rather than an unrelated audit-log failure.
+    await auditLog(user.id, user.name, 'REJECT_MINING_EVENT', 'event', String(ev.id ?? ev.title), {
+      title: ev.title,
+      reason: ev.reason ?? 'Rejected from data mining',
+      minedId: ev.id ?? null,
+    })
+    return { success: true }
+  })
+
 }

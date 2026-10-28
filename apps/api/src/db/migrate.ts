@@ -89,6 +89,28 @@ const migrations = [
     updated_at TIMESTAMPTZ DEFAULT NOW()
   )`,
 
+  // Persistent decisions for events handled in the mining screen.
+  `CREATE TABLE IF NOT EXISTS mining_event_decisions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    mined_id TEXT,
+    decision TEXT NOT NULL CHECK (decision IN ('APPROVED', 'NEEDS_REVIEW', 'REJECTED')),
+    title TEXT NOT NULL,
+    event_date DATE,
+    venue TEXT,
+    city TEXT,
+    source_url TEXT,
+    event_url TEXT,
+    event_payload JSONB NOT NULL DEFAULT '{}',
+    note TEXT,
+    postgres_event_id UUID REFERENCES events(id) ON DELETE SET NULL,
+    decided_by UUID REFERENCES admin_users(id) ON DELETE SET NULL,
+    decided_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_mining_decisions_mined_id ON mining_event_decisions(mined_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_mining_decisions_decision ON mining_event_decisions(decision)`,
+  `CREATE INDEX IF NOT EXISTS idx_mining_decisions_event_url ON mining_event_decisions(event_url)`,
+  `CREATE INDEX IF NOT EXISTS idx_mining_decisions_title_date ON mining_event_decisions(LOWER(title), event_date)`,
+
   // Indexes
   `CREATE INDEX IF NOT EXISTS idx_events_status ON events(status)`,
   `CREATE INDEX IF NOT EXISTS idx_events_date ON events(date)`,

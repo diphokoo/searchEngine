@@ -158,7 +158,7 @@ export default function EventDetailPage() {
           )}
 
           {/* NightLife sync status */}
-          {(event as unknown as Record<string, unknown>).nightlifeSyncStatus && (
+          {Boolean((event as unknown as Record<string, unknown>).nightlifeSyncStatus) && (
             <div className="mb-2 p-2 rounded" style={{
               background: (event as unknown as Record<string, unknown>).nightlifeSyncStatus === 'synced'
                 ? 'rgba(25,135,84,0.15)'
@@ -175,10 +175,10 @@ export default function EventDetailPage() {
                 }`} />
                 <strong>NightLife: {String((event as unknown as Record<string, unknown>).nightlifeSyncStatus).replace('_', ' ')}</strong>
               </div>
-              {(event as unknown as Record<string, unknown>).nightlifeEventId && (
+              {Boolean((event as unknown as Record<string, unknown>).nightlifeEventId) && (
                 <div style={{ color: 'var(--text-muted)' }}>ID: {String((event as unknown as Record<string, unknown>).nightlifeEventId)}</div>
               )}
-              {(event as unknown as Record<string, unknown>).nightlifeSyncError && (
+              {Boolean((event as unknown as Record<string, unknown>).nightlifeSyncError) && (
                 <div className="text-danger mt-1">{String((event as unknown as Record<string, unknown>).nightlifeSyncError)}</div>
               )}
               {(['failed', 'duplicate_review'] as string[]).includes(String((event as unknown as Record<string, unknown>).nightlifeSyncStatus)) && event.status === 'APPROVED' && (
